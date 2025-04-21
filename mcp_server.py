@@ -64,7 +64,7 @@ def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional
         cmd.extend(["--model", model])
     if system_prompt:
         # Aichat uses -s or --system for system prompt
-        cmd.extend(["-s", system_prompt])
+        cmd.extend(["--prompt", system_prompt])
 
     cmd.append(prompt)
 

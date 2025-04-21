@@ -1,0 +1,8 @@
+Build the MCP (Model Context Protocol) server using FastMCP (See: https://github.com/jlowin/fastmcp). The server should have the following tools:
+
+1. ask_frontier_models: This tool allows to ask questions to our frontier models at once. Let make this async by returning the request id. In this tool, we make some CLI commands to send the prompts to multiple LLM models via aichat CLI. See https://github.com/sigoden/aichat. This tool also allows to pass an optional system_prompt.
+
+2. check_frontier_models_response: This tool allows to check the status of a request made with ask_frontier_models. It should return the status and the result of the response.
+
+3. ask_gpt, ask_claude, ask_gemini, ask_deepseek: This tool allows to ask question to a specific model. It should return the result of the request immediately. This also allows passing an optional system_prompt param.
+
