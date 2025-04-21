@@ -2,256 +2,248 @@ import uuid
 import subprocess
 import threading
 import json
+import shlex
 from typing import List, Dict, Any, Optional
 
 from fastmcp import FastMCP
 
 # --- Configuration ---
-# Adjust these model names if your aichat configuration uses different identifiers
+# Assuming these are the "frontier" models
 DEFAULT_MODELS = [
     "openai:o1",
     "claude:claude-3-7-sonnet-20250219",
     "gemini:gemini-2.0-flash",
     "deepseek:bedrock_deepseek_r1"
 ]
-# Ensure 'aichat' command is in the system's PATH
+# Map tool names to specific model identifiers from DEFAULT_MODELS
+# We'll use the first one found for each provider as a default for the specific tools
+MODEL_MAP = {
+    "gpt": next((m for m in DEFAULT_MODELS if m.startswith("openai:")), None),
+    "claude": next((m for m in DEFAULT_MODELS if m.startswith("claude:")), None),
+    "gemini": next((m for m in DEFAULT_MODELS if m.startswith("gemini:")), None),
+    "deepseek": next((m for m in DEFAULT_MODELS if m.startswith("deepseek:")), None),
+}
+# Ensure all mapped models were found
+if None in MODEL_MAP.values():
+    raise ValueError(f"Could not find a default model in DEFAULT_MODELS for one of the providers: {MODEL_MAP}")
+
+
 AICHAT_COMMAND = "aichat"
 
-# --- In-memory store for async requests ---
-# Warning: This is not persistent. Server restarts will lose state.
-# For production, consider using a database or persistent cache.
+# --- State ---
+# Store for asynchronous requests
 request_store: Dict[str, Dict[str, Any]] = {}
 
-# --- Initialize FastMCP ---
+# --- FastMCP Instance ---
 mcp = FastMCP(
     title="Multi-Model AI Assistant MCP",
     description="A FastMCP server interacting with multiple LLMs via aichat CLI.",
     version="0.1.0",
+    # Enable background tasks if FastMCP supports it directly,
+    # otherwise threading is used explicitly below.
+    # background_tasks=True # Example if FastMCP has built-in support
 )
 
-# --- Helper Function to run aichat ---
-def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
-    """Runs the aichat command and returns the result."""
-    command = [AICHAT_COMMAND]
-    if model:
-        command.extend(["--model", model])
-    if system_prompt:
-        # Ensure system prompt is passed correctly, potentially needing quotes handled by subprocess
-        command.extend(["--system", system_prompt])
+# --- Helper Functions ---
 
-    command.append(prompt)
+def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Runs the aichat CLI command and returns the parsed JSON output.
+
+    Args:
+        prompt: The user prompt.
+        model: The specific model to use (optional).
+        system_prompt: The system prompt to use (optional).
+
+    Returns:
+        A dictionary containing the response from aichat.
+
+    Raises:
+        RuntimeError: If the aichat command fails or returns invalid JSON.
+    """
+    cmd = [AICHAT_COMMAND, "--output-json"]
+    if model:
+        cmd.extend(["--model", model])
+    if system_prompt:
+        # Aichat uses -s or --system for system prompt
+        cmd.extend(["-s", system_prompt])
+
+    cmd.append(prompt)
 
     try:
-        print(f"Running command: {' '.join(command)}") # For debugging
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=True, # Raise an exception if aichat returns non-zero exit code
-            encoding='utf-8'
-        )
-        return {"success": True, "output": result.stdout.strip()}
-    except FileNotFoundError:
-        print(f"Error: '{AICHAT_COMMAND}' command not found. Is aichat installed and in PATH?")
-        return {"success": False, "error": f"'{AICHAT_COMMAND}' not found."}
+        print(f"Running command: {' '.join(shlex.quote(c) for c in cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        # Try to parse the last line as JSON, as aichat might print status/info first
+        json_output = None
+        for line in reversed(result.stdout.strip().splitlines()):
+             try:
+                 json_output = json.loads(line)
+                 break
+             except json.JSONDecodeError:
+                 continue # Ignore lines that are not valid JSON
+
+        if json_output is None:
+             raise ValueError("No valid JSON output found from aichat.")
+
+        print(f"Command successful. Output keys: {json_output.keys()}")
+        return json_output
+
     except subprocess.CalledProcessError as e:
-        print(f"Error running aichat: {e}")
-        print(f"Stderr: {e.stderr}")
-        return {"success": False, "error": e.stderr.strip() or f"aichat exited with status {e.returncode}"}
+        error_message = f"aichat command failed with exit code {e.returncode}.\nStderr: {e.stderr}\nStdout: {e.stdout}"
+        print(error_message)
+        # Return an error structure consistent with successful runs if possible
+        return {"error": error_message, "status": "error"}
+    except FileNotFoundError:
+        error_message = f"Error: '{AICHAT_COMMAND}' command not found. Make sure aichat is installed and in your PATH."
+        print(error_message)
+        return {"error": error_message, "status": "error"}
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return {"success": False, "error": str(e)}
+        error_message = f"An unexpected error occurred: {e}"
+        print(error_message)
+        return {"error": error_message, "status": "error"}
 
-# --- Background Task Functions ---
 
-def _task_ask_multimodels(request_id: str, prompt: str, models: List[str]):
-    """Background task for ask_multimodels."""
+def _task_ask_frontier_models(request_id: str, prompt: str, system_prompt: Optional[str]):
+    """
+    Background task to query multiple frontier models via aichat.
+    Updates the request_store with results.
+    """
     results = {}
     status = "completed"
-    for model_name in models:
-        print(f"[{request_id}] Querying model: {model_name}")
-        result = run_aichat(prompt=prompt, model=model_name)
-        results[model_name] = result
-        if not result["success"]:
-            status = "completed_with_errors" # Mark if any model failed
-            print(f"[{request_id}] Error querying {model_name}: {result.get('error')}")
-        else:
-             print(f"[{request_id}] Received response from {model_name}")
+    try:
+        for model_id in DEFAULT_MODELS:
+            print(f"[{request_id}] Querying model: {model_id}")
+            response = run_aichat(prompt, model=model_id, system_prompt=system_prompt)
+            results[model_id] = response
+            if response.get("error"):
+                print(f"[{request_id}] Error querying {model_id}: {response['error']}")
+                # Optionally set overall status to partial_error or keep completed
+                # status = "partial_error" # Or similar if needed
+    except Exception as e:
+        print(f"[{request_id}] Unexpected error during multi-model query: {e}")
+        status = "error"
+        results["error"] = str(e) # Add overall error if the loop fails
 
-    # Update the store
     request_store[request_id]["status"] = status
     request_store[request_id]["results"] = results
-    print(f"[{request_id}] Multimodel request finished with status: {status}")
-
-def _task_ask_model_with_multi_personas(request_id: str, prompt: str, model: str, system_prompts: List[str]):
-    """Background task for ask_model_with_multi_personas."""
-    results = {}
-    status = "completed"
-    for i, sys_prompt in enumerate(system_prompts):
-        persona_key = f"persona_{i+1}"
-        print(f"[{request_id}] Querying model {model} with {persona_key}")
-        result = run_aichat(prompt=prompt, model=model, system_prompt=sys_prompt)
-        results[persona_key] = {
-            "system_prompt": sys_prompt,
-            "result": result
-        }
-        if not result["success"]:
-            status = "completed_with_errors"
-            print(f"[{request_id}] Error querying {model} with {persona_key}: {result.get('error')}")
-        else:
-            print(f"[{request_id}] Received response from {model} with {persona_key}")
-
-
-    # Update the store
-    request_store[request_id]["status"] = status
-    request_store[request_id]["results"] = results
-    print(f"[{request_id}] Multi-persona request finished with status: {status}")
+    print(f"[{request_id}] Task finished with status: {status}")
 
 
 # --- MCP Tools ---
 
 @mcp.tool()
-def ask_multimodels(prompt: str, models: Optional[List[str]] = None) -> Dict[str, str]:
+def ask_frontier_models(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, str]:
     """
-    Asynchronously asks a question to multiple LLM models via the aichat CLI.
+    Asynchronously asks a question to all configured frontier models.
 
     Args:
-        prompt: The question/prompt to ask the models.
-        models: A list of model identifiers (as configured in aichat) to query.
-                If None, uses default models.
+        prompt: The question to ask the models.
+        system_prompt: An optional system prompt to guide the models' behavior.
 
     Returns:
-        A dictionary containing the request_id and the initial status ('submitted').
+        A dictionary containing the request_id to check the status later.
     """
     request_id = str(uuid.uuid4())
-    models_to_use = models if models else DEFAULT_MODELS
+    request_store[request_id] = {"status": "running", "results": {}}
+    print(f"[{request_id}] Starting frontier models task for prompt: '{prompt[:50]}...'")
 
-    # Initialize status in the store
-    request_store[request_id] = {
-        "status": "pending",
-        "prompt": prompt,
-        "models_queried": models_to_use,
-        "results": {}
-    }
-
-    # Start background thread
+    # Run the actual querying in a background thread
     thread = threading.Thread(
-        target=_task_ask_multimodels,
-        args=(request_id, prompt, models_to_use),
-        daemon=True # Allows main program to exit even if threads are running
+        target=_task_ask_frontier_models,
+        args=(request_id, prompt, system_prompt)
     )
     thread.start()
 
-    print(f"Submitted ask_multimodels request: {request_id}")
-    return {"request_id": request_id, "status": "submitted"}
+    return {"request_id": request_id}
 
 @mcp.tool()
-def check_multimodel_request(request_id: str) -> Dict[str, Any]:
+def check_frontier_models_response(request_id: str) -> Dict[str, Any]:
     """
-    Checks the status and results of a request made with ask_multimodels.
+    Checks the status and results of a request made via ask_frontier_models.
 
     Args:
-        request_id: The ID of the request to check.
+        request_id: The ID returned by ask_frontier_models.
 
     Returns:
-        A dictionary containing the status and results (if available)
-        or an error message if the request ID is not found.
+        A dictionary containing the status ('running', 'completed', 'error')
+        and the results from the models if completed. Returns an error
+        message if the request_id is not found.
     """
-    if request_id in request_store:
-        print(f"Checking status for request: {request_id}")
-        return request_store[request_id]
-    else:
-        print(f"Request ID not found: {request_id}")
-        return {"error": "Request ID not found", "request_id": request_id}
+    if request_id not in request_store:
+        return {"error": f"Request ID '{request_id}' not found."}
+
+    print(f"[{request_id}] Checking status.")
+    return request_store[request_id]
 
 @mcp.tool()
-def ask_model(prompt: str, model: str) -> Dict[str, Any]:
+def ask_gpt(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
     """
-    Synchronously asks a question to a specific LLM model via the aichat CLI.
+    Synchronously asks a question to the default GPT model.
 
     Args:
-        prompt: The question/prompt to ask the model.
-        model: The model identifier (as configured in aichat) to query.
-               Must be one of the supported models.
+        prompt: The question to ask the model.
+        system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        A dictionary containing the result ('output') or an error message.
+        The response dictionary directly from the aichat command for the GPT model.
     """
-    # Optional: Add validation for the model name if needed
-    # if model not in DEFAULT_MODELS: # Or a broader list of allowed models
-    #     return {"success": False, "error": f"Model '{model}' is not supported by this tool."}
-
-    print(f"Asking model '{model}' synchronously...")
-    result = run_aichat(prompt=prompt, model=model)
-    print(f"Received synchronous response from '{model}'. Success: {result['success']}")
-    return result # Contains 'success' and either 'output' or 'error'
+    model_id = MODEL_MAP["gpt"]
+    print(f"Asking GPT model ({model_id}) synchronously: '{prompt[:50]}...'")
+    return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 @mcp.tool()
-def ask_model_with_multi_personas(
-    prompt: str,
-    model: str,
-    system_prompts: List[str]
-) -> Dict[str, str]:
+def ask_claude(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
     """
-    Asynchronously asks a question to a specific model using multiple system prompts (personas).
+    Synchronously asks a question to the default Claude model.
 
     Args:
-        prompt: The question/prompt to ask the model.
-        model: The model identifier (as configured in aichat).
-        system_prompts: A list of system prompts to use as different personas.
+        prompt: The question to ask the model.
+        system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        A dictionary containing the request_id and the initial status ('submitted').
+        The response dictionary directly from the aichat command for the Claude model.
     """
-    request_id = str(uuid.uuid4())
-
-    # Initialize status in the store
-    request_store[request_id] = {
-        "status": "pending",
-        "prompt": prompt,
-        "model": model,
-        "system_prompts": system_prompts,
-        "results": {}
-    }
-
-    # Start background thread
-    thread = threading.Thread(
-        target=_task_ask_model_with_multi_personas,
-        args=(request_id, prompt, model, system_prompts),
-        daemon=True
-    )
-    thread.start()
-
-    print(f"Submitted ask_model_with_multi_personas request: {request_id}")
-    return {"request_id": request_id, "status": "submitted"}
+    model_id = MODEL_MAP["claude"]
+    print(f"Asking Claude model ({model_id}) synchronously: '{prompt[:50]}...'")
+    return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 @mcp.tool()
-def check_model_with_multi_personas_request(request_id: str) -> Dict[str, Any]:
+def ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
     """
-    Checks the status and results of a request made with ask_model_with_multi_personas.
+    Synchronously asks a question to the default Gemini model.
 
     Args:
-        request_id: The ID of the request to check.
+        prompt: The question to ask the model.
+        system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        A dictionary containing the status and results (if available)
-        or an error message if the request ID is not found.
+        The response dictionary directly from the aichat command for the Gemini model.
     """
-    # This function is identical to check_multimodel_request, just for the other async tool
-    if request_id in request_store:
-        print(f"Checking status for multi-persona request: {request_id}")
-        return request_store[request_id]
-    else:
-        print(f"Multi-persona request ID not found: {request_id}")
-        return {"error": "Request ID not found", "request_id": request_id}
+    model_id = MODEL_MAP["gemini"]
+    print(f"Asking Gemini model ({model_id}) synchronously: '{prompt[:50]}...'")
+    return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
+
+@mcp.tool()
+def ask_deepseek(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Synchronously asks a question to the default Deepseek model.
+
+    Args:
+        prompt: The question to ask the model.
+        system_prompt: An optional system prompt to guide the model's behavior.
+
+    Returns:
+        The response dictionary directly from the aichat command for the Deepseek model.
+    """
+    model_id = MODEL_MAP["deepseek"]
+    print(f"Asking Deepseek model ({model_id}) synchronously: '{prompt[:50]}...'")
+    return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 
-# --- Run the server ---
-if __name__ == "__main__":
-    print("Starting FastMCP server...")
-    print(f"Default models: {DEFAULT_MODELS}")
-    print(f"Using aichat command: {AICHAT_COMMAND}")
-    print("Make sure 'aichat' is installed, configured, and in your PATH.")
-    # You might want to configure host and port here
-    # mcp.run(host="0.0.0.0", port=8000)
-    mcp.run() # Runs on default host/port (usually 127.0.0.1:8000)
+# --- Main Execution ---
+# (If you have a main block to run the server, it would go here)
+# Example:
+# if __name__ == "__main__":
+#     import uvicorn
+#     # Assuming FastMCP integrates with FastAPI/Uvicorn
+#     uvicorn.run(mcp.app, host="0.0.0.0", port=8000)
