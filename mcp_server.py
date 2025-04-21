@@ -239,11 +239,5 @@ def ask_deepseek(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, 
     print(f"Asking Deepseek model ({model_id}) synchronously: '{prompt[:50]}...'")
     return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
-
-# --- Main Execution ---
-# (If you have a main block to run the server, it would go here)
-# Example:
-# if __name__ == "__main__":
-#     import uvicorn
-#     # Assuming FastMCP integrates with FastAPI/Uvicorn
-#     uvicorn.run(mcp.app, host="0.0.0.0", port=8000)
+if __name__ == "__main__":
+    mcp.run()
