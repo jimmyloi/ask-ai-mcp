@@ -1,7 +1,7 @@
 import uuid
 import subprocess
 import threading
-import json
+import json # Keep json for potential future use or other parts, but not for aichat output
 import shlex
 from typing import List, Dict, Any, Optional
 
@@ -27,11 +27,14 @@ MODEL_MAP = {
 if None in MODEL_MAP.values():
     raise ValueError(f"Could not find a default model in DEFAULT_MODELS for one of the providers: {MODEL_MAP}")
 
-
 AICHAT_COMMAND = "aichat"
+# Define prefixes to identify error messages returned by run_aichat
+AICHAT_ERROR_PREFIXES = ("aichat command failed", "Error:", "An unexpected error occurred")
+
 
 # --- State ---
 # Store for asynchronous requests
+# Results will now store model_id -> text_response_or_error_string
 request_store: Dict[str, Dict[str, Any]] = {}
 
 # --- FastMCP Instance ---
@@ -39,16 +42,13 @@ mcp = FastMCP(
     title="Multi-Model AI Assistant MCP",
     description="A FastMCP server interacting with multiple LLMs via aichat CLI.",
     version="0.1.0",
-    # Enable background tasks if FastMCP supports it directly,
-    # otherwise threading is used explicitly below.
-    # background_tasks=True # Example if FastMCP has built-in support
 )
 
 # --- Helper Functions ---
 
-def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None) -> str:
     """
-    Runs the aichat CLI command and returns the parsed JSON output.
+    Runs the aichat CLI command and returns the text output.
 
     Args:
         prompt: The user prompt.
@@ -56,12 +56,10 @@ def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional
         system_prompt: The system prompt to use (optional).
 
     Returns:
-        A dictionary containing the response from aichat.
-
-    Raises:
-        RuntimeError: If the aichat command fails or returns invalid JSON.
+        The raw text output from aichat, or an error message string
+        if the command fails.
     """
-    cmd = [AICHAT_COMMAND, "--output-json"]
+    cmd = [AICHAT_COMMAND] # Removed --output-json
     if model:
         cmd.extend(["--model", model])
     if system_prompt:
@@ -72,57 +70,55 @@ def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional
 
     try:
         print(f"Running command: {' '.join(shlex.quote(c) for c in cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Try to parse the last line as JSON, as aichat might print status/info first
-        json_output = None
-        for line in reversed(result.stdout.strip().splitlines()):
-             try:
-                 json_output = json.loads(line)
-                 break
-             except json.JSONDecodeError:
-                 continue # Ignore lines that are not valid JSON
-
-        if json_output is None:
-             raise ValueError("No valid JSON output found from aichat.")
-
-        print(f"Command successful. Output keys: {json_output.keys()}")
-        return json_output
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, encoding='utf-8') # Specify encoding
+        output_text = result.stdout.strip()
+        print(f"Command successful. Output length: {len(output_text)}")
+        return output_text
 
     except subprocess.CalledProcessError as e:
-        error_message = f"aichat command failed with exit code {e.returncode}.\nStderr: {e.stderr}\nStdout: {e.stdout}"
+        # Combine stdout and stderr for better error context
+        error_message = (
+            f"aichat command failed with exit code {e.returncode}.\n"
+            f"Stderr: {e.stderr.strip()}\n"
+            f"Stdout: {e.stdout.strip()}"
+        )
         print(error_message)
-        # Return an error structure consistent with successful runs if possible
-        return {"error": error_message, "status": "error"}
+        return error_message # Return the error message string
     except FileNotFoundError:
         error_message = f"Error: '{AICHAT_COMMAND}' command not found. Make sure aichat is installed and in your PATH."
         print(error_message)
-        return {"error": error_message, "status": "error"}
+        return error_message # Return the error message string
     except Exception as e:
         error_message = f"An unexpected error occurred: {e}"
         print(error_message)
-        return {"error": error_message, "status": "error"}
+        return error_message # Return the error message string
 
 
 def _task_ask_frontier_models(request_id: str, prompt: str, system_prompt: Optional[str]):
     """
     Background task to query multiple frontier models via aichat.
-    Updates the request_store with results.
+    Updates the request_store with text results or error messages.
     """
-    results = {}
+    results: Dict[str, str] = {} # Store model_id -> text response/error
     status = "completed"
+    has_errors = False
     try:
         for model_id in DEFAULT_MODELS:
             print(f"[{request_id}] Querying model: {model_id}")
-            response = run_aichat(prompt, model=model_id, system_prompt=system_prompt)
-            results[model_id] = response
-            if response.get("error"):
-                print(f"[{request_id}] Error querying {model_id}: {response['error']}")
-                # Optionally set overall status to partial_error or keep completed
-                # status = "partial_error" # Or similar if needed
+            response_text = run_aichat(prompt, model=model_id, system_prompt=system_prompt)
+            results[model_id] = response_text
+            # Check if the response text indicates an error
+            if response_text.startswith(AICHAT_ERROR_PREFIXES):
+                print(f"[{request_id}] Error querying {model_id}: {response_text}")
+                has_errors = True
     except Exception as e:
-        print(f"[{request_id}] Unexpected error during multi-model query: {e}")
+        print(f"[{request_id}] Unexpected error during multi-model query loop: {e}")
         status = "error"
-        results["error"] = str(e) # Add overall error if the loop fails
+        results["_loop_error"] = str(e) # Add overall error if the loop itself fails
+
+    # Adjust final status based on individual model results
+    if status == "completed" and has_errors:
+        status = "completed_with_errors"
 
     request_store[request_id]["status"] = status
     request_store[request_id]["results"] = results
@@ -144,6 +140,7 @@ def ask_frontier_models(prompt: str, system_prompt: Optional[str] = None) -> Dic
         A dictionary containing the request_id to check the status later.
     """
     request_id = str(uuid.uuid4())
+    # Results will store text strings now
     request_store[request_id] = {"status": "running", "results": {}}
     print(f"[{request_id}] Starting frontier models task for prompt: '{prompt[:50]}...'")
 
@@ -165,18 +162,21 @@ def check_frontier_models_response(request_id: str) -> Dict[str, Any]:
         request_id: The ID returned by ask_frontier_models.
 
     Returns:
-        A dictionary containing the status ('running', 'completed', 'error')
-        and the results from the models if completed. Returns an error
-        message if the request_id is not found.
+        A dictionary containing the status ('running', 'completed',
+        'completed_with_errors', 'error') and the results (dictionary mapping
+        model_id to its text response or error message) if completed.
+        Returns an error message if the request_id is not found.
     """
     if request_id not in request_store:
-        return {"error": f"Request ID '{request_id}' not found."}
+        # Return structure consistent with successful check but indicating the ID error
+        return {"status": "error", "error": f"Request ID '{request_id}' not found."}
 
     print(f"[{request_id}] Checking status.")
+    # Return the whole entry, which now contains text results
     return request_store[request_id]
 
 @mcp.tool()
-def ask_gpt(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+def ask_gpt(prompt: str, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default GPT model.
 
@@ -185,14 +185,14 @@ def ask_gpt(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        The response dictionary directly from the aichat command for the GPT model.
+        The raw text response (or error message) from the aichat command for the GPT model.
     """
     model_id = MODEL_MAP["gpt"]
     print(f"Asking GPT model ({model_id}) synchronously: '{prompt[:50]}...'")
     return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 @mcp.tool()
-def ask_claude(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+def ask_claude(prompt: str, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Claude model.
 
@@ -201,14 +201,14 @@ def ask_claude(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, An
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        The response dictionary directly from the aichat command for the Claude model.
+        The raw text response (or error message) from the aichat command for the Claude model.
     """
     model_id = MODEL_MAP["claude"]
     print(f"Asking Claude model ({model_id}) synchronously: '{prompt[:50]}...'")
     return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 @mcp.tool()
-def ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+def ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Gemini model.
 
@@ -217,14 +217,14 @@ def ask_gemini(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, An
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        The response dictionary directly from the aichat command for the Gemini model.
+        The raw text response (or error message) from the aichat command for the Gemini model.
     """
     model_id = MODEL_MAP["gemini"]
     print(f"Asking Gemini model ({model_id}) synchronously: '{prompt[:50]}...'")
     return run_aichat(prompt, model=model_id, system_prompt=system_prompt)
 
 @mcp.tool()
-def ask_deepseek(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+def ask_deepseek(prompt: str, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Deepseek model.
 
@@ -233,7 +233,7 @@ def ask_deepseek(prompt: str, system_prompt: Optional[str] = None) -> Dict[str, 
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
-        The response dictionary directly from the aichat command for the Deepseek model.
+        The raw text response (or error message) from the aichat command for the Deepseek model.
     """
     model_id = MODEL_MAP["deepseek"]
     print(f"Asking Deepseek model ({model_id}) synchronously: '{prompt[:50]}...'")
