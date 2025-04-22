@@ -47,16 +47,16 @@ mcp = FastMCP(
 
 # --- Helper Functions ---
 
-# Add ctx: Context argument
-def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional[str] = None, ctx: Context) -> str:
+# Add ctx: Context argument, reordered parameters
+def run_aichat(prompt: str, ctx: Context, model: Optional[str] = None, system_prompt: Optional[str] = None) -> str:
     """
     Runs the aichat CLI command and returns the text output. Logs using Context.
 
     Args:
         prompt: The user prompt.
+        ctx: The FastMCP context object for logging.
         model: The specific model to use (optional).
         system_prompt: The system prompt to use (optional).
-        ctx: The FastMCP context object for logging.
 
     Returns:
         The raw text output from aichat, or an error message string
@@ -102,8 +102,8 @@ def run_aichat(prompt: str, model: Optional[str] = None, system_prompt: Optional
         ctx.error(error_message)
         return error_message # Return the error message string
 
-# Add ctx: Context argument
-def _task_ask_frontier_models(request_id: str, prompt: str, system_prompt: Optional[str], ctx: Context):
+# Add ctx: Context argument, reordered parameters
+def _task_ask_frontier_models(request_id: str, prompt: str, ctx: Context, system_prompt: Optional[str]):
     """
     Background task to query multiple frontier models via aichat.
     Updates the request_store with text results or error messages. Logs using Context.
@@ -115,8 +115,8 @@ def _task_ask_frontier_models(request_id: str, prompt: str, system_prompt: Optio
         for model_id in DEFAULT_MODELS:
             # Use ctx.info for progress within the task
             ctx.info(f"[{request_id}] Querying model: {model_id}")
-            # Pass ctx to run_aichat
-            response_text = run_aichat(prompt, model=model_id, system_prompt=system_prompt, ctx=ctx)
+            # Pass ctx to run_aichat (ctx is now the second positional arg)
+            response_text = run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
             results[model_id] = response_text
             # Check if the response text indicates an error
             if response_text.startswith(AICHAT_ERROR_PREFIXES):
@@ -226,8 +226,8 @@ def ask_gpt(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> s
     model_id = MODEL_MAP["gpt"]
     # Use ctx.info for starting the synchronous call
     ctx.info(f"Asking GPT model ({model_id}) synchronously: '{prompt[:50]}...'")
-    # Pass ctx to run_aichat
-    return run_aichat(prompt, model=model_id, system_prompt=system_prompt, ctx=ctx)
+    # Pass ctx to run_aichat (ctx is now the second positional arg)
+    return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
 # Add ctx: Context argument
 @mcp.tool()
@@ -245,8 +245,8 @@ def ask_claude(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -
     model_id = MODEL_MAP["claude"]
     # Use ctx.info for starting the synchronous call
     ctx.info(f"Asking Claude model ({model_id}) synchronously: '{prompt[:50]}...'")
-    # Pass ctx to run_aichat
-    return run_aichat(prompt, model=model_id, system_prompt=system_prompt, ctx=ctx)
+    # Pass ctx to run_aichat (ctx is now the second positional arg)
+    return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
 # Add ctx: Context argument
 @mcp.tool()
@@ -264,8 +264,8 @@ def ask_gemini(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -
     model_id = MODEL_MAP["gemini"]
     # Use ctx.info for starting the synchronous call
     ctx.info(f"Asking Gemini model ({model_id}) synchronously: '{prompt[:50]}...'")
-    # Pass ctx to run_aichat
-    return run_aichat(prompt, model=model_id, system_prompt=system_prompt, ctx=ctx)
+    # Pass ctx to run_aichat (ctx is now the second positional arg)
+    return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
 # Add ctx: Context argument
 @mcp.tool()
@@ -283,8 +283,8 @@ def ask_deepseek(prompt: str, system_prompt: Optional[str] = None, ctx: Context)
     model_id = MODEL_MAP["deepseek"]
     # Use ctx.info for starting the synchronous call
     ctx.info(f"Asking Deepseek model ({model_id}) synchronously: '{prompt[:50]}...'")
-    # Pass ctx to run_aichat
-    return run_aichat(prompt, model=model_id, system_prompt=system_prompt, ctx=ctx)
+    # Pass ctx to run_aichat (ctx is now the second positional arg)
+    return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
 if __name__ == "__main__":
     # No context available here, standard print is fine or use Python's logging module
