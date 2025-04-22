@@ -27,7 +27,7 @@ MODEL_MAP = {
 if None in MODEL_MAP.values():
     raise ValueError(f"Could not find a default model in DEFAULT_MODELS for one of the providers: {MODEL_MAP}")
 
-AICHAT_COMMAND = "aichat"
+AICHAT_COMMAND = "/opt/homebrew/bin/aichat"
 # Define prefixes to identify error messages returned by run_aichat
 AICHAT_ERROR_PREFIXES = ("aichat command failed", "Error:", "An unexpected error occurred")
 
