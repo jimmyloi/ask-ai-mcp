@@ -73,10 +73,12 @@ def run_aichat(prompt: str, ctx: Context, model: Optional[str] = None, system_pr
 
     try:
         # Use ctx.debug for detailed command logging
-        cmd_str = ' '.join(shlex.quote(c) for c in cmd)
-        ctx.debug(f"Running command: {cmd_str}")
+        #cmd_str = ' '.join(shlex.quote(c) for c in cmd)
+        #ctx.debug(f"Running command: {cmd_str}")
+        cmd = [AICHAT_COMMAND, "-S", "tell me a joke"]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, encoding='utf-8') # Specify encoding
         output_text = result.stdout.strip()
+        return output_text
         # Use ctx.info for successful execution summary
         ctx.info(f"Command successful for model '{model or 'default'}'. Output length: {len(output_text)}")
         return output_text
