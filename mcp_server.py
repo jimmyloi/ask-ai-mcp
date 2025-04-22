@@ -149,16 +149,16 @@ def _task_ask_frontier_models(request_id: str, prompt: str, ctx: Context, system
 
 # --- MCP Tools ---
 
-# Add ctx: Context argument
+# Add ctx: Context argument, reordered parameters
 @mcp.tool()
-def ask_frontier_models(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> Dict[str, str]:
+def ask_frontier_models(prompt: str, ctx: Context, system_prompt: Optional[str] = None) -> Dict[str, str]:
     """
     Asynchronously asks a question to all configured frontier models. Logs using Context.
 
     Args:
         prompt: The question to ask the models.
-        system_prompt: An optional system prompt to guide the models' behavior.
         ctx: The FastMCP context object for logging.
+        system_prompt: An optional system prompt to guide the models' behavior.
 
     Returns:
         A dictionary containing the request_id to check the status later.
@@ -170,10 +170,10 @@ def ask_frontier_models(prompt: str, system_prompt: Optional[str] = None, ctx: C
     ctx.info(f"[{request_id}] Starting frontier models task for prompt: '{prompt[:50]}...'")
 
     # Run the actual querying in a background thread
-    # Pass ctx to the target function
+    # Pass ctx to the target function (ctx is now the third positional arg)
     thread = threading.Thread(
         target=_task_ask_frontier_models,
-        args=(request_id, prompt, system_prompt, ctx) # Pass ctx here
+        args=(request_id, prompt, ctx, system_prompt) # Pass ctx here
     )
     thread.start()
 
@@ -206,19 +206,16 @@ def check_frontier_models_response(request_id: str, ctx: Context) -> Dict[str, A
     # Return the whole entry, which now contains text results
     return request_store[request_id]
 
-# Add ctx: Context argument
+# Add ctx: Context argument, reordered parameters
 @mcp.tool()
-def ask_gpt(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> str:
+def ask_gpt(prompt: str, ctx: Context, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default GPT model. Logs using Context.
 
     Args:
         prompt: The question to ask the model.
+        ctx: The FastMCP context object for logging.
         system_prompt: An optional system prompt to guide the model's behavior.
-        ctx: The FastMCP context object for logging.
-        ctx: The FastMCP context object for logging.
-        ctx: The FastMCP context object for logging.
-        ctx: The FastMCP context object for logging.
 
     Returns:
         The raw text response (or error message) from the aichat command for the GPT model.
@@ -229,14 +226,15 @@ def ask_gpt(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> s
     # Pass ctx to run_aichat (ctx is now the second positional arg)
     return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
-# Add ctx: Context argument
+# Add ctx: Context argument, reordered parameters
 @mcp.tool()
-def ask_claude(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> str:
+def ask_claude(prompt: str, ctx: Context, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Claude model. Logs using Context.
 
     Args:
         prompt: The question to ask the model.
+        ctx: The FastMCP context object for logging.
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
@@ -248,14 +246,15 @@ def ask_claude(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -
     # Pass ctx to run_aichat (ctx is now the second positional arg)
     return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
-# Add ctx: Context argument
+# Add ctx: Context argument, reordered parameters
 @mcp.tool()
-def ask_gemini(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> str:
+def ask_gemini(prompt: str, ctx: Context, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Gemini model. Logs using Context.
 
     Args:
         prompt: The question to ask the model.
+        ctx: The FastMCP context object for logging.
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
@@ -267,14 +266,15 @@ def ask_gemini(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -
     # Pass ctx to run_aichat (ctx is now the second positional arg)
     return run_aichat(prompt, ctx, model=model_id, system_prompt=system_prompt)
 
-# Add ctx: Context argument
+# Add ctx: Context argument, reordered parameters
 @mcp.tool()
-def ask_deepseek(prompt: str, system_prompt: Optional[str] = None, ctx: Context) -> str:
+def ask_deepseek(prompt: str, ctx: Context, system_prompt: Optional[str] = None) -> str:
     """
     Synchronously asks a question to the default Deepseek model. Logs using Context.
 
     Args:
         prompt: The question to ask the model.
+        ctx: The FastMCP context object for logging.
         system_prompt: An optional system prompt to guide the model's behavior.
 
     Returns:
