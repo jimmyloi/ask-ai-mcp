@@ -1,5 +1,8 @@
+# Add platform and subprocess imports
+import platform
+import subprocess
 import uuid
-# import subprocess # No longer needed
+# import subprocess # No longer needed - Re-add it!
 import threading
 # import json # Keep json for potential future use or other parts
 # import shlex # No longer needed
@@ -45,10 +48,47 @@ request_store: Dict[str, Dict[str, Any]] = {}
 mcp = FastMCP(
     title="Multi-Model AI Assistant MCP (LiteLLM)",
     description="A FastMCP server interacting with multiple LLMs via the litellm library.",
-    version="0.2.0", # Incremented version
+    version="0.2.1", # Incremented version for notification feature
 )
 
 # --- Helper Functions ---
+
+# New helper function for sending notifications
+def send_notification(ctx: Context, request_id: str, status: str):
+    """
+    Sends a desktop notification on macOS using terminal-notifier.
+    Logs a warning if not on macOS or if terminal-notifier fails.
+    """
+    if platform.system() != "Darwin":
+        ctx.debug("Not on macOS (Darwin), skipping terminal-notifier.")
+        return
+
+    try:
+        title = "MCP Task Complete"
+        message = f"Task {request_id} finished with status: {status}"
+        # Construct the command
+        command = [
+            'terminal-notifier',
+            '-title', title,
+            '-message', message,
+            '-sound', 'default', # Optional: adds a sound
+            '-group', 'mcp-tasks' # Optional: groups notifications
+        ]
+        ctx.debug(f"Sending notification: {' '.join(command)}")
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            ctx.warning(
+                f"terminal-notifier failed (code {result.returncode}): {result.stderr.strip()}. "
+                "Ensure terminal-notifier is installed (`brew install terminal-notifier`)."
+            )
+    except FileNotFoundError:
+        ctx.warning(
+            "terminal-notifier command not found. "
+            "Ensure it's installed (`brew install terminal-notifier`) and in your PATH."
+        )
+    except Exception as e:
+        ctx.warning(f"Failed to send notification for task {request_id}: {e}")
 
 # New helper function using litellm
 def call_litellm(prompt: str, ctx: Context, model: str, system_prompt: Optional[str] = None) -> str:
@@ -138,6 +178,11 @@ def _task_ask_frontier_models(request_id: str, prompt: str, ctx: Context, system
     # Update request store
     request_store[request_id]["status"] = status
     request_store[request_id]["results"] = results
+
+    # --- Send notification ---
+    # This is called *after* the status is finalized and results are stored.
+    send_notification(ctx, request_id, status)
+    # --- End notification ---
 
 
 # --- MCP Tools ---
