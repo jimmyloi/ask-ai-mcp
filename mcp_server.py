@@ -68,7 +68,7 @@ def send_notification(ctx: Context, request_id: str, status: str):
         message = f"Task {request_id} finished with status: {status}"
         # Construct the command
         command = [
-            'terminal-notifier',
+            '/Users/minhloi/.rbenv/shims/terminal-notifier',
             '-title', title,
             '-message', message,
             '-sound', 'default', # Optional: adds a sound
