@@ -1,10 +1,10 @@
-# Multi-Model AI Assistant MCP (LiteLLM)
+# Multi-Model AI Assistant MCP
 
 Version: 0.2.1
 
 ## Description
 
-This project provides a FastMCP server that acts as a Master Control Program (MCP) to interact with various Large Language Models (LLMs). It leverages the [LiteLLM library](https://github.com/BerriAI/litellm) to provide a unified interface for querying different model providers like OpenAI, Anthropic, Google (Gemini), and AWS Bedrock.
+This project provides a FastMCP server that acts as a Model Context Protocal (MCP) to interact with various Large Language Models (LLMs). It leverages the [LiteLLM library](https://github.com/BerriAI/litellm) to provide a unified interface for querying different model providers like OpenAI, Anthropic, Google (Gemini), and AWS Bedrock.
 
 The server exposes tools to query specific models directly or to query a set of default "frontier" models concurrently and retrieve their responses asynchronously.
 
